@@ -1,0 +1,767 @@
+/******************************************************************************
+
+                              Online C++ Compiler.
+               Code, Compile, Run and Debug C++ program online.
+Write your code in this editor and press "Run" button to compile and execute it.
+
+*******************************************************************************/
+
+/* Fdtd3D.cpp : 3D FDTD + UPML 
+Author : Omkar 
+1) E,D vectors on yee cell edge centres and H,B vectors 
+on Yee cell face centres. 
+Ex[i + 0.5][j][k], Ey[i][j + 0.5][k], Ez[i][j][k + 0.5] 
+Dx[i + 0.5][j][k], Dy[i][j + 0.5][k], Dz[i][j][k + 0.5] 
+Hx[i][j + 0.5][k + 0.5], Hy[i + 0.5][j][k + 0.5], Hz[i + 0.5][j + 0.5][k] 
+Bx[i][j + 0.5][k + 0.5], By[i + 0.5][j][k + 0.5], Bz[i + 0.5][j + 0.5][k] 
+2) Constitutive parameter matrices 
+epsr [XCELLS] [YCELLS] [ZCELLS] 
+sigma[XCELLS] [YCELLS] [ZCELLS] 
+*/ 
+#include <iostream> 
+#include <math.h> 
+#include <stdlib.h> 
+#include <fstream>
+#define PL 19 //Number of PML layers. 
+#define PSX 70 //Number of yee cells in problem space along x-direction 
+#define PSY 150 //Number of yee cells in problem space along y-direction 
+#define PSZ 16 //Number of yee cells in problem space along z-direction 
+#define XCELLS PSX + (2 * PL) //Total number of yee cells along x-direction 
+#define YCELLS PSY + (2 * PL) //Total number of yee cells along y-direction 
+#define ZCELLS PSZ + (2 * PL) //Total number of yee cells along z-direction 
+typedef double*** MatPtr; //3D matrix 
+const double muo = 12.5664e-7; 
+const double epso = 8.85e-12; 
+const double CuSigma = 5.8e78; 
+//Matrices 
+MatPtr epsr, sigma; 
+MatPtr Dx,Dy,Dz,Bx,By,Bz,Ex,Ey,Ez,Hx,Hy,Hz; 
+MatPtr C1Dx,C2Dx,C1Dy,C2Dy,C1Dz,C2Dz; 
+MatPtr C1Bx,C2Bx,C1By,C2By,C1Bz,C2Bz; 
+MatPtr C1Ex,C2Ex,C3Ex,C1Ey,C2Ey,C3Ey,C1Ez,C2Ez,C3Ez; 
+MatPtr C1Hx,C2Hx,C3Hx,C1Hy,C2Hy,C3Hy,C1Hz,C2Hz,C3Hz; 
+//Function prototypes 
+void CreateAllMatrices(); 
+void DeleteAllMatrices(); 
+void CreateMatrix(MatPtr&,int dimx,int dimy,int dimz); 
+void DeleteMatrix(MatPtr, int dimx,int dimy,int dimz); 
+void FillUpdateEqnConstantMatrices(double g, double sigmao,double dt); 
+
+void main() 
+{ 
+//cout <<"--------------FDTD 3D simulator--------------------\n"; 
+//T - Number of time steps 
+//i,j,k - x,y,z direction yee cell index 
+//n - Temporal index 
+int T = 5000; 
+int i,j,k,n; 
+//Text files to write the simulation data 
+ofstream Ezfile,Hxfile; 
+Ezfile.open("Ezfile.txt"); 
+Hxfile.open("Hxfile.txt"); 
+//dx, dy, dz ,dt – Spatial and temporal discretization interval 
+double dx,dy,dz,dt; 
+//UPML parameters 
+double g = 1.4; 
+double sigmao = 0.5; 
+// Source plane at j = SP 
+// Terminal plane at j = TP 
+// GP – Ground plane location at k = PL + 1 
+int SP = 22; 
+int TP = 32; 
+int GP = PL + 1; 
+//Initiliazation of discretization interval 
+dx = 0.000265; 
+dy = 0.000265; 
+dz = 0.000265; 
+dt = dz/(6e8); 
+// Create all the 3D matrices and initialize the elements to zero 
+// matrices include field / flux components and precomputed update equation 
+// coefficients 
+CreateAllMatrices(); 
+//Fill the constitutive parameter matrices 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(j = 0;j < YCELLS;j++) 
+{ 
+for(k = 0;k < ZCELLS;k++) 
+{ 
+epsr [i][j][k] = 1.0; 
+sigma[i][j][k] = 0.0; 
+//Ground plane at k = 17 
+//Ground plane extends throughout the entire XY plane 
+if(k == GP && i >= 0 && i < XCELLS && j >= 0 && j < YCELLS) 
+{ 
+sigma[i][j][k] = Cusigma; 
+}
+//3 layers of substrate corresponding to substrate 
+//thickness = 0.795 mm. The substrate extends in the whole 
+//XY plane of the problem space. But does not extend into //UPML 
+if((k == GP + 1 || k == GP + 2 || k == GP + 3) && i >= PL && i < XCELLS - PL && j >= PL && j < YCELLS - PL) 
+{ 
+epsr[i][j][k] = 2.2; 
+}
+//Feed line width is 9dx 
+//Feed line is 8dx offset from the edge of the patch
+//i.e it starts from i = 35 
+if(k == GP + 4) 
+{ 
+if(i >= 35 && i <= 43) 
+{ 
+//For incident wave simulation : j >=0 && j <= //YCELLS – 1 
+//For patch antenna simulation : j >= 0 && j //<= 102 
+if(j >= 0 && j <= 102) 
+{ 
+sigma[i][j][k] = CuSigma; 
+} 
+} 
+}
+//Patch antenna 
+if(k == GP + 4) 
+{ 
+//The width of patch = 12.45 mm = 47dx 
+if(i >= 27 && i <= 73) 
+{ 
+//The length of patch = 16 mm = 60 dx 
+if(j >= 102 && j <= 162) 
+{ 
+sigma[i][j][k] = CuSigma; 
+} 
+} 
+} 
+} 
+} 
+}
+//Precomputer update equation coefficient matrices 
+FillUpdateEqnConstantMatrices(g,sigmao,dt); 
+//Temp variables to hold previous field values and field differential values. 
+double Dxo,Exo,Dyo,Eyo,Dzo,Ezo; 
+double dHx,dHy,dHz; 
+double Hxo,Hyo,Hzo,Bxo,Byo,Bzo; 
+double dEx,dEy,dEz; 
+//----------------------FDTD update loop starts here--------------------------- 
+for(n = 0;n < T;n++) 
+{ 
+//to = 4T 
+double temp = -1*(((n*dt - 120*dt)*(n*dt - 120*dt))/(30*30*dt*dt)); 
+double source = exp(temp); 
+double Ezinc = source; 
+/*Dx,Ex update 
+Dx,Ex[XCELLS][YCELLS + 1][ZCELLS + 1] 
+Dx,Ex at j = 0 or j = YCELLS or k = 0 or k = ZCELLS are on the 
+PEC surface. So they are zero and need not be calculated. 
+*/ 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(j = 1;j < YCELLS;j++) 
+{ 
+for(k = 1;k < ZCELLS;k++) 
+{ 
+Dxo = Dx[i][j][k]; 
+Exo = Ex[i][j][k];
+//Dx update equation 
+dHz = (Hz[i][j][k] - Hz[i][j - 1][k]) / dy; 
+dHy = (Hy[i][j][k] - Hy[i][j][k - 1]) / dz; 
+Dx[i][j][k] = C1Dx[i][j][k] * Dxo 
++ C2Dx[i][j][k] * (dHz - dHy); 
+//Ex update equation 
+Ex[i][j][k] = C2Ex[i][j][k] * Dx[i][j][k] 
+- C3Ex[i][j][k] * Dxo 
++ C1Ex[i][j][k] * Exo; 
+} 
+} 
+}
+/*Dy,Ey update 
+Dy,Ey[XCELLS + 1][YCELLS][ZCELLS + 1] 
+Dy,Ey at i = 0 or i = XCELLS or k = 0 or k = ZCELLS are on the 
+PEC surface. So they are zero and need not be calculated. 
+*/ 
+for(i = 1;i < XCELLS;i++) 
+{ 
+for(j = 0;j < YCELLS;j++) 
+{ 
+for(k = 1;k < ZCELLS;k++) 
+{ 
+Dyo = Dy[i][j][k]; 
+Eyo = Ey[i][j][k]; 
+//Dy update equation 
+dHx = (Hx[i][j][k] - Hx[i][j][k - 1]) / dz; 
+dHz = (Hz[i][j][k] - Hz[i - 1][j][k]) / dx; 
+Dy[i][j][k] = C1Dy[i][j][k] * Dyo 
++ C2Dy[i][j][k] * (dHx - dHz); 
+//Ey update equation 
+Ey[i][j][k] = C2Ey[i][j][k] * Dy[i][j][k] 
+- C3Ey[i][j][k] * Dyo 
++ C1Ey[i][j][k] * Eyo; 
+} 
+} 
+}
+//Dz,Ez update 
+for(i = 1;i < XCELLS;i++) 
+{ 
+for(j = 1;j < YCELLS;j++) 
+{ 
+for(k = 0;k < ZCELLS;k++) 
+{ 
+Dzo = Dz[i][j][k]; 
+Ezo = Ez[i][j][k]; 
+//Dy update equation 
+dHx = (Hx[i][j][k] - Hx[i][j - 1][k]) / dy; 
+dHy = (Hy[i][j][k] - Hy[i - 1][j][k]) / dx; 
+Dz[i][j][k] = C1Dz[i][j][k] * Dzo 
++ C2Dz[i][j][k] * (dHy - dHx); 
+//Ez update equation 
+Ez[i][j][k] = C2Ez[i][j][k] * Dz[i][j][k] 
+- C3Ez[i][j][k] * Dzo 
++ C1Ez[i][j][k] * Ezo; 
+//Excitation of the all Ez components under the feed //line microstrip at j = Source plane 
+if(j == SP && i >= 35 && i <= 43 && k >= GP + 1 && k <= GP + 3) 
+{ 
+Ez[i][j][k] += Ezinc; 
+} 
+} 
+} 
+}
+//Write simulation data to text file 
+Hxfile<<Hx[39][TP][GP + 2]<<"\n"; 
+Ezfile<<Ez[35][TP][GP + 2]<<"\n"; 
+//Hx,Bx update 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(int j = 0;j < YCELLS;j++) 
+{ 
+for(int k = 0;k < ZCELLS;k++) 
+{ 
+Hxo = Hx[i][j][k]; 
+Bxo = Bx[i][j][k]; 
+dEz = (Ez[i][j + 1][k] - Ez[i][j][k]) / dy; 
+dEy = (Ey[i][j][k + 1] - Ey[i][j][k]) / dz; 
+ 
+Bx[i][j][k] = C1Bx[i][j][k] * Bxo - C2Bx[i][j][k] * (dEz - dEy); 
+Hx[i][j][k] = C1Hx[i][j][k] * Hxo + C2Hx[i][j][k] * Bx[i][j][k] - C3Hx[i][j][k] * Bxo; 
+} 
+} 
+}
+ 
+//Hy,By update 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(int j = 0;j < YCELLS;j++) 
+{ 
+for(int k = 0;k < ZCELLS;k++) 
+{ 
+Hyo = Hy[i][j][k]; 
+Byo = By[i][j][k]; 
+dEx = (Ex[i][j][k + 1] - Ex[i][j][k]) / dz; 
+dEz = (Ez[i + 1][j][k] - Ez[i][j][k]) / dx; 
+By[i][j][k] = C1By[i][j][k] * Byo - C2By[i][j][k] * (dEx - dEz); 
+Hy[i][j][k] = C1Hy[i][j][k] * Hyo + C2Hy[i][j][k] * By[i][j][k] - C3Hy[i][j][k] * Byo; 
+} 
+}
+}
+//Hz,Bz update 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(int j = 0;j < YCELLS;j++) 
+{ 
+for(int k = 0;k < ZCELLS;k++) 
+{ 
+Hzo = Hz[i][j][k]; 
+Bzo = Bz[i][j][k]; 
+dEy = (Ey[i + 1][j][k] - Ey[i][j][k]) / dx; 
+dEx = (Ex[i][j + 1][k] - Ex[i][j][k]) / dy; 
+Bz[i][j][k] = C1Bz[i][j][k] * Bzo - C2Bz[i][j][k] * (dEy - dEx); 
+Hz[i][j][k] = C1Hz[i][j][k] * Hzo + C2Hz[i][j][k] * Bz[i][j][k] - C3Hz[i][j][k] * Bzo; 
+} 
+} 
+} 
+}
+DeleteAllMatrices(); 
+Hxfile.close(); 
+Ezfile.close(); 
+return;
+}
+//------------------------------------------------------------------------------------ 
+void FillUpdateEqnConstantMatrices(double g, double sigmao, double dt) 
+{ 
+double Dx_ky,Dx_sigmay,Dy_kz,Dy_sigmaz,Dz_kx,Dz_sigmax; 
+double Bx_ky,Bx_sigmay,By_kz,By_sigmaz,Bz_kx,Bz_sigmax; 
+double Ex_kx,Ex_sigmax,Ex_kz,Ex_sigmaz,Ey_ky,Ey_sigmay, 
+Ey_kx,Ey_sigmax,Ez_kz,Ez_sigmaz,Ez_ky,Ez_sigmay; 
+double Hx_kx,Hx_sigmax,Hx_kz,Hx_sigmaz,Hy_ky,Hy_sigmay, 
+Hy_kx,Hy_sigmax,Hz_kz,Hz_sigmaz,Hz_ky,Hz_sigmay; 
+//C1Dx,C2Dx,C1Ex,C2Ex,C3Ex 
+for(int i = 0;i < XCELLS; i++) 
+{ 
+for(int j = 1;j < YCELLS; j++) 
+{ 
+for(int k = 1;k < ZCELLS; k++) 
+{ 
+Dx_ky = 1; 
+Dx_sigmay = sigma[i][j][k]; 
+Ex_kx = 1; 
+Ex_sigmax = sigma[i][j][k]; 
+Ex_kz = 1; 
+Ex_sigmaz = sigma[i][j][k]; 
+//Dx_ky,Dx_sigmay 
+if(j < PL) 
+{ 
+Dx_ky = pow(g,PL - j); 
+Dx_sigmay = sigmao * Dx_ky; 
+}
+else if (j >= PL + PSY) 
+{
+Dx_ky = pow(g,j - PL - PSY); 
+Dx_sigmay = sigmao * Dx_ky; 
+}
+//Ex_kx, Ex_sigmax 
+if(i < PL) 
+{ 
+Ex_kx = pow(g,PL - i - 0.5); 
+Ex_sigmax = sigmao * Ex_kx; 
+}
+else if(i >= PL + PSX) 
+{ 
+Ex_kx = pow(g,i - PL - PSX + 0.5); 
+Ex_sigmax = sigmao * Ex_kx; 
+}
+//Ex_kz,Ex_sigmaz 
+if(k < PL) 
+{ 
+Ex_kz = pow(g,PL - k); 
+Ex_sigmaz = sigmao * Ex_kz; 
+}
+else if(k >= PL + PSZ) 
+{ 
+Ex_kz = pow(g,k - PL - PSZ); 
+Ex_sigmaz = sigmao * Ex_kz; 
+}
+//C1Dx,C2Dx 
+C1Dx[i][j][k] = (2 * epso * epsr[i][j][k] * Dx_ky - Dx_sigmay * dt)/(2 * epso * epsr[i][j][k] * Dx_ky + Dx_sigmay * dt); 
+C2Dx[i][j][k] = (2 * epso * epsr[i][j][k] * dt) /(2 * epso * epsr[i][j][k] * Dx_ky + Dx_sigmay * dt); 
+//C1Ex,C2Ex,C3Ex,C1Ey,C2Ey,C3Ey,C1Ez,C2Ez,C3Ez 
+C1Ex[i][j][k] = (2 * epso * epsr[i][j][k] * Ex_kz - Ex_sigmaz * dt) /(2* epso * epsr[i][j][k] * Ex_kz + Ex_sigmaz * dt); 
+C2Ex[i][j][k] = (2 * epso * epsr[i][j][k] * Ex_kx + Ex_sigmax * dt)/((2 * epso * epsr[i][j][k] * Ex_kz + Ex_sigmaz * dt)* epso * epsr[i][j][k]); 
+ 
+C3Ex[i][j][k] = (2 * epso * epsr[i][j][k] * Ex_kx - Ex_sigmax * dt)/((2 * epso * epsr[i][j][k] * Ex_kz + Ex_sigmaz * dt)* epso * epsr[i][j][k]); 
+} 
+} 
+}
+ 
+//C1Dy,C2Dy,C1Ey,C2Ey,C3Ey 
+for(i = 1;i < XCELLS; i++) 
+{ 
+for(int j = 0;j < YCELLS; j++) 
+{ 
+for(int k = 1;k < ZCELLS; k++) 
+{ 
+Dy_kz = 1; 
+Dy_sigmaz = sigma[i][j][k]; 
+Ey_ky = 1;
+Ey_sigmay = sigma[i][j][k]; 
+Ey_kx = 1; 
+Ey_sigmax = sigma[i][j][k]; 
+//Dy_kz,Dy_sigmaz 
+if(k < PL) 
+{ 
+Dy_kz = pow(g,PL - k); 
+Dy_sigmaz = sigmao * Dy_kz; 
+}
+else if (k >= PL + PSZ) 
+{ 
+Dy_kz = pow(g,k - PL - PSZ); 
+Dy_sigmaz = sigmao * Dy_kz; 
+}
+//Ey_ky, Ey_sigmay 
+if(j < PL) 
+{ 
+Ey_ky = pow(g,PL - j - 0.5); 
+Ey_sigmay = sigmao * Ey_ky; 
+}
+else if(j >= PL + PSY) 
+{ 
+Ey_ky = pow(g,j - PL - PSY + 0.5); 
+Ey_sigmay = sigmao * Ey_ky; 
+}
+//Ey_kx,Ey_sigmax 
+if(i < PL) 
+{ 
+Ey_kx = pow(g,PL - i); 
+Ey_sigmax = sigmao * Ey_kx; 
+}
+else if(i >= PL + PSX) 
+{ 
+Ey_kx = pow(g,i - PL - PSX); 
+Ey_sigmax = sigmao * Ey_kx; 
+}
+//C1Dy,C2Dy 
+C1Dy[i][j][k] = (2 * epso * epsr[i][j][k] * Dy_kz - Dy_sigmaz * dt)/(2 * epso * epsr[i][j][k] * Dy_kz + Dy_sigmaz * dt); 
+C2Dy[i][j][k] = (2 * epso * epsr[i][j][k] * dt) /(2 * epso * epsr[i][j][k] * Dy_kz + Dy_sigmaz * dt); 
+//C1Ey,C2Ey,C3Ey 
+C1Ey[i][j][k] = (2 * epso * epsr[i][j][k] * Ey_kx - Ey_sigmax * dt)/(2* epso * epsr[i][j][k] * Ey_kx + Ey_sigmax * dt); 
+C2Ey[i][j][k] = (2 * epso * epsr[i][j][k] * Ey_ky + Ey_sigmay * dt)/((2 * epso * epsr[i][j][k] * Ey_kx + Ey_sigmax * dt)* epso * epsr[i][j][k]); 
+C3Ey[i][j][k] = (2 * epso * epsr[i][j][k] * Ey_ky - Ey_sigmay * dt)/((2 * epso * epsr[i][j][k] * Ey_kx + Ey_sigmax * dt)* epso * epsr[i][j][k]); 
+} 
+}
+}
+//C1Dz,C2Dz,C1Ez,C2Ez,C3Ez 
+for(i = 1;i < XCELLS; i++) 
+{ 
+for(int j = 1;j < YCELLS; j++) 
+{ 
+for(int k = 0;k < ZCELLS; k++) 
+{ 
+Dz_kx = 1; 
+Dz_sigmax = sigma[i][j][k]; 
+Ez_kz = 1; 
+Ez_sigmaz = sigma[i][j][k]; 
+Ez_ky = 1; 
+Ez_sigmay = sigma[i][j][k]; 
+//Dz_kx,Dz_sigmax 
+if(i < PL) 
+{ 
+Dz_kx = pow(g,PL - i); 
+Dz_sigmax = sigmao * Dz_kx; 
+}
+else if (i >= PL + PSX) 
+{ 
+Dz_kx = pow(g,i - PL - PSX); 
+Dz_sigmax = sigmao * Dz_kx; 
+}
+//Ez_kz, Ez_sigmaz 
+if(k < PL) 
+{ 
+Ez_kz = pow(g,PL - k - 0.5); 
+Ez_sigmaz = sigmao * Ez_kz; 
+}
+else if(k >= PL + PSZ) 
+{ 
+Ez_kz = pow(g,k - PL - PSZ + 0.5); 
+Ez_sigmaz = sigmao * Ez_kz; 
+}
+//Ez_ky,Ez_sigmay 
+if(j < PL) 
+{ 
+Ez_ky = pow(g,PL - j); 
+Ez_sigmay = sigmao * Ez_ky; 
+}
+else if(j >= PL + PSY) 
+{ 
+Ez_ky = pow(g,j - PL - PSY); 
+Ez_sigmay = sigmao * Ez_ky; 
+}
+//C1Dz,C2Dz 
+C1Dz[i][j][k] = (2 * epso * epsr[i][j][k] * Dz_kx - Dz_sigmax * dt) /(2 * epso * epsr[i][j][k] * Dz_kx + Dz_sigmax * dt); 
+C2Dz[i][j][k] = (2 * epso * epsr[i][j][k] * dt) /(2 * epso * epsr[i][j][k] * Dz_kx + Dz_sigmax * dt); 
+//C1Ez,C2Ez,C3Ez
+ 
+C1Ez[i][j][k] = (2 * epso * epsr[i][j][k] * Ez_ky - Ez_sigmay * dt)/(2* epso * epsr[i][j][k] * Ez_ky + Ez_sigmay * dt); 
+C2Ez[i][j][k] = (2 * epso * epsr[i][j][k] * Ez_kz + Ez_sigmaz * dt)/((2 * epso * epsr[i][j][k] * Ez_ky + Ez_sigmay * dt) * epso * epsr[i][j][k]); 
+C3Ez[i][j][k] = (2 * epso * epsr[i][j][k] * Ez_kz - Ez_sigmaz * dt)/((2 * epso * epsr[i][j][k] * Ez_ky + Ez_sigmay * dt)* epso * epsr[i][j][k]); 
+} 
+} 
+}
+ 
+//C1Bx,C2Bx,C1Hx,C2Hx,C3Hx 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(int j = 0;j < YCELLS;j++) 
+{ 
+for(int k = 0;k < ZCELLS;k++) 
+{ 
+Bx_ky = 1; 
+Bx_sigmay = sigma[i][j][k]; 
+Hx_kx = 1; 
+Hx_sigmax = sigma[i][j][k]; 
+Hx_kz = 1; 
+Hx_sigmaz = sigma[i][j][k]; 
+//Bx_ky,Bx_sigmay 
+if(j < PL) 
+{ 
+Bx_ky = pow(g,PL - j - 0.5); 
+Bx_sigmay = sigmao * Bx_ky; 
+}
+else if(j >= PL + PSY) 
+{ 
+Bx_ky = pow(g,j - PL - PSY + 0.5); 
+Bx_sigmay = sigmao * Bx_ky; 
+}
+//} 
+//Hx_kx,Hx_sigmax 
+if(i < PL) 
+{ 
+Hx_kx = pow(g,PL - i); 
+Hx_sigmax = sigmao * Hx_kx; 
+}
+else if(i >= PL + PSX) 
+{ 
+Hx_kx = pow(g,i - PL - PSX); 
+Hx_sigmax = sigmao * Hx_kx; 
+}
+//Hx_kz,Hx_sigmaz 
+if(k < PL) 
+{ 
+Hx_kz = pow(g,PL - k - 0.5); 
+Hx_sigmaz = sigmao * Hx_kz; 
+}
+else if(k >= PL + PSZ) 
+{
+Hx_kz = pow(g,k - PL - PSZ + 0.5); 
+Hx_sigmaz = sigmao * Hx_kz; 
+}
+//C1Bx,C2Bx,C1By,C2By,C1Bz,C2Bz 
+C1Bx[i][j][k] = (2 * epso * epsr[i][j][k] * Bx_ky - Bx_sigmay * dt)/(2 * epso * epsr[i][j][k] * Bx_ky + Bx_sigmay * dt); 
+C2Bx[i][j][k] = (2 * epso * epsr[i][j][k] * dt) 
+/(2 * epso * epsr[i][j][k] * Bx_ky + Bx_sigmay * dt); 
+//C1Hx,C2Hx,C3Hx,C1Hy,C2Hy,C3Hy,C1Hz,C2Hz,C3Hz 
+C2Hx[i][j][k] = (2 * epso * epsr[i][j][k] * Hx_kx + Hx_sigmax * dt)/((2 * epso * epsr[i][j][k] * Hx_kz + Hx_sigmaz * dt)* muo ); 
+C3Hx[i][j][k] = (2 * epso * epsr[i][j][k] * Hx_kx - Hx_sigmax * dt)/((2 * epso * epsr[i][j][k] * Hx_kz + Hx_sigmaz * dt)* muo ); 
+C1Hx[i][j][k] = (2 * epso * epsr[i][j][k] * Hx_kz - Hx_sigmaz * dt) /(2* epso * epsr[i][j][k] * Hx_kz + Hx_sigmaz * dt); 
+} 
+} 
+}
+//C1By,C2By,C1Hy,C2Hy,C3Hy 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(int j = 0;j < YCELLS;j++) 
+{ 
+for(int k = 0;k < ZCELLS;k++) 
+{ 
+By_kz = 1; 
+By_sigmaz = sigma[i][j][k]; 
+Hy_ky = 1; 
+Hy_sigmay = sigma[i][j][k]; 
+Hy_kx = 1; 
+Hy_sigmax = sigma[i][j][k]; 
+//By_kz,By_sigmaz 
+if(k < PL) 
+{ 
+By_kz = pow(g,PL - k - 0.5); 
+By_sigmaz = sigmao * By_kz; 
+}
+else if(k >= PL + PSZ) 
+{ 
+By_kz = pow(g,k - PL - PSZ + 0.5); 
+By_sigmaz = sigmao * By_kz; 
+}
+//Hy_ky,Hy_sigmay 
+if(j < PL) 
+{ 
+Hy_ky = pow(g,PL - j); 
+Hy_sigmay = sigmao * Hy_ky; 
+}
+else if(j >= PL + PSY)
+{ 
+Hy_ky = pow(g,j - PL - PSY); 
+Hy_sigmay = sigmao * Hy_ky; 
+}
+//} 
+//Hy_kx,Hy_sigmax 
+if(i < PL) 
+{ 
+Hy_kx = pow(g,PL - i - 0.5); 
+Hy_sigmax = sigmao * Hy_kx; 
+}
+else if(i >= PL + PSX) 
+{ 
+Hy_kx = pow(g,i - PL - PSX + 0.5); 
+Hy_sigmax = sigmao * Hy_kx; 
+}
+//C1By,C2By 
+C1By[i][j][k] = (2 * epso * epsr[i][j][k] * By_kz - By_sigmaz * dt)/(2 * epso * epsr[i][j][k] * By_kz + By_sigmaz * dt); 
+C2By[i][j][k] = (2 * epso * epsr[i][j][k] * dt) /(2 * epso * epsr[i][j][k] * By_kz + By_sigmaz * dt); 
+//C1Hy,C2Hy,C3Hy 
+C2Hy[i][j][k] = (2 * epso * epsr[i][j][k] * Hy_ky + Hy_sigmay * dt)/((2 * epso * epsr[i][j][k] * Hy_kx + Hy_sigmax * dt)* muo ); 
+C3Hy[i][j][k] = (2 * epso * epsr[i][j][k] * Hy_ky - Hy_sigmay * dt)/((2 * epso * epsr[i][j][k] * Hy_kx + Hy_sigmax * dt)* muo ); 
+ 
+C1Hy[i][j][k] = (2 * epso * epsr[i][j][k] * Hy_kx - Hy_sigmax * dt)/(2* epso * epsr[i][j][k] * Hy_kx + Hy_sigmax * dt); 
+} 
+} 
+}
+ 
+//C1Bz,C2Bz,C1Hz,C2Hz,C3Hz 
+for(i = 0;i < XCELLS;i++) 
+{ 
+for(int j = 0;j < YCELLS;j++) 
+{ 
+for(int k = 0;k < ZCELLS;k++) 
+{ 
+Bz_kx = 1; 
+Bz_sigmax = sigma[i][j][k]; 
+Hz_kz = 1; 
+Hz_sigmaz = sigma[i][j][k]; 
+Hz_ky = 1; 
+Hz_sigmay = sigma[i][j][k]; 
+//Bz_kx,Bz_sigmax 
+if(i < PL) 
+{ 
+Bz_kx = pow(g,PL - i - 0.5); 
+Bz_sigmax = sigmao * Bz_kx; 
+}
+else if(i >= PL + PSX)
+{ 
+Bz_kx = pow(g,i - PL - PSX + 0.5); 
+Bz_sigmax = sigmao * Bz_kx; 
+}
+//Hz_kz,Hz_sigmaz 
+if(k < PL) 
+{ 
+Hz_kz = pow(g,PL - k); 
+Hz_sigmaz = sigmao * Hz_kz; 
+}
+else if(k >= PL + PSZ) 
+{ 
+Hz_kz = pow(g,k - PL - PSZ); 
+Hz_sigmaz = sigmao * Hz_kz; 
+}
+//Hz_ky,Hz_sigmay 
+if(j < PL) 
+{ 
+Hz_ky = pow(g,PL - j - 0.5); 
+Hz_sigmay = sigmao * Hz_ky; 
+}
+else if(j >= PL + PSY) 
+{ 
+Hz_ky = pow(g,j - PL - PSY + 0.5); 
+Hz_sigmay = sigmao * Hz_ky; 
+}
+//} 
+//C1Bz,C2Bz 
+C1Bz[i][j][k] = (2 * epso * epsr[i][j][k] * Bz_kx - Bz_sigmax * dt)/(2 * epso * epsr[i][j][k] * Bz_kx + Bz_sigmax * dt); 
+C2Bz[i][j][k] = (2 * epso * epsr[i][j][k] * dt) /(2 * epso * epsr[i][j][k] * Bz_kx + Bz_sigmax * dt); 
+//C1Hz,C2Hz,C3Hz 
+C2Hz[i][j][k] = (2 * epso * epsr[i][j][k] * Hz_kz + Hz_sigmaz * dt)/((2 * epso * epsr[i][j][k] * Hz_ky + Hz_sigmay * dt)* muo ); 
+C3Hz[i][j][k] = (2 * epso * epsr[i][j][k] * Hz_kz - Hz_sigmaz * dt)/((2 * epso * epsr[i][j][k] * Hz_ky + Hz_sigmay * dt)* muo ); 
+C1Hz[i][j][k] = (2 * epso * epsr[i][j][k] * Hz_ky - Hz_sigmay * dt)/(2* epso * epsr[i][j][k] * Hz_ky + Hz_sigmay * dt); 
+} 
+} 
+} 
+}
+void CreateAllMatrices() 
+{ 
+//Create the parameter matrices 
+CreateMatrix(epsr, XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(sigma,XCELLS,YCELLS,ZCELLS);
+//Field matrices 
+CreateMatrix(Dx,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(Dy,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(Dz,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(Bx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(By,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(Bz,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(Hx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(Hy,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(Hz,XCELLS,YCELLS,ZCELLS); 
+//Create the update eqn constant matrices 
+CreateMatrix(C1Dx,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(C2Dx,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(C1Dy,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(C2Dy,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(C1Dz,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(C2Dz,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(C1Bx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C2Bx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C1By,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C2By,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C1Bz,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C2Bz,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C1Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(C2Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(C3Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+CreateMatrix(C1Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(C2Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(C3Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+CreateMatrix(C1Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(C2Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(C3Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+CreateMatrix(C1Hx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C2Hx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C3Hx,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C1Hy,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C2Hy,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C3Hy,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C1Hz,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C2Hz,XCELLS,YCELLS,ZCELLS); 
+CreateMatrix(C3Hz,XCELLS,YCELLS,ZCELLS); 
+}
+void DeleteAllMatrices() 
+{ 
+//Delete the constitute parameter matrices 
+DeleteMatrix(epsr ,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(sigma,XCELLS,YCELLS,ZCELLS); 
+//Delete the field component matrices 
+DeleteMatrix(Dx,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(Dy,XCELLS + 1,YCELLS,ZCELLS + 1);
+DeleteMatrix(Dz,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+DeleteMatrix(Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(Bx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(By,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(Bz,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(Hx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(Hy,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(Hz,XCELLS,YCELLS,ZCELLS); 
+//Delete the update eqn constant matrices 
+DeleteMatrix(C1Dx,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(C2Dx,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(C1Dy,XCELLS + 1,YCELLS,ZCELLS + 1); 
+DeleteMatrix(C2Dy,XCELLS + 1,YCELLS,ZCELLS + 1); 
+DeleteMatrix(C1Dz,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(C2Dz,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(C1Bx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C2Bx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C1By,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C2By,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C1Bz,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C2Bz,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C1Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(C2Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(C3Ex,XCELLS,YCELLS + 1,ZCELLS + 1); 
+DeleteMatrix(C1Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+DeleteMatrix(C2Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+DeleteMatrix(C3Ey,XCELLS + 1,YCELLS,ZCELLS + 1); 
+DeleteMatrix(C1Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(C2Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(C3Ez,XCELLS + 1,YCELLS + 1,ZCELLS); 
+DeleteMatrix(C1Hx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C2Hx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C3Hx,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C1Hy,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C2Hy,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C3Hy,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C1Hz,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C2Hz,XCELLS,YCELLS,ZCELLS); 
+DeleteMatrix(C3Hz,XCELLS,YCELLS,ZCELLS); 
+}
+//Create 3 dimensional matrix of dimx X dimy X dimz 
+//All elements are set to 0.0 as default  void CreateMatrix(MatPtr& mat,int dimx,int dimy,int dimz) 
+{ 
+mat = new double**[dimx]; 
+for(int i = 0; i < dimx; i++) 
+{ 
+mat[i] = new double*[dimy]; 
+for(int j = 0;j < dimy; j++) 
+{ 
+mat[i][j] = new double[dimz]; 
+for(int k = 0;k < dimz; k++)
+{ 
+mat[i][j][k] = 0.0; 
+} 
+} 
+} 
+}
+//Delete the 3 D matrix. Free the memory  void DeleteMatrix(MatPtr mat,int dimx,int dimy,int dimz) 
+{ 
+for(int i = 0;i < dimx;i++) 
+{ 
+for(int j = 0;j<dimy;j++) 
+{ 
+free(mat[i][j]); 
+}
+free(mat[i]); 
+}
+free(mat); }
